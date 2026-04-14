@@ -1,0 +1,12 @@
+[project]
+name = "osvvmtestbenchbuilder"
+version = "0.1.0"
+description = "An LLM-powered testbench generator for OSVVM"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jinja2>=3.1.6",
+    "langchain>=1.2.15",
+    "nltk>=3.9.4",
+    "pydantic>=2.12.5",
+]
