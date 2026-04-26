@@ -74,10 +74,41 @@ def _osvvm_compile_ok(output: str) -> bool:
     return False
 
 
-def run_ghdl(output_dir: Path, osvvm_dir: Path | None = None) -> GhdlResult:
+def _build_launcher(startup_tcl: Path, osvvm_dir: Path, compiled_libs_dir: Path | None) -> str:
+    if compiled_libs_dir is not None:
+        lib_line = f"LinkLibraryDirectory {{{compiled_libs_dir}}}\n"
+    else:
+        lib_line = f"build {{{osvvm_dir / 'OsvvmLibraries.pro'}}}\n"
+    return f"source {{{startup_tcl}}}\n" + lib_line + "build runTests.pro\n"
+
+
+def write_launcher(
+    output_dir: Path,
+    osvvm_dir: Path,
+    compiled_libs_dir: Path | None = None,
+) -> Path:
+    """Write run.tcl to output_dir. Returns the path written."""
+    if compiled_libs_dir is None:
+        candidate = osvvm_dir / "CompiledLibs"
+        if candidate.is_dir() and any(candidate.rglob("*.cf")):
+            compiled_libs_dir = candidate
+
+    startup_tcl = osvvm_dir / "Scripts" / "StartUp.tcl"
+    content = _build_launcher(startup_tcl, osvvm_dir, compiled_libs_dir)
+    dest = output_dir / "run.tcl"
+    dest.write_text(content)
+    return dest
+
+
+def run_ghdl(
+    output_dir: Path,
+    osvvm_dir: Path | None = None,
+    compiled_libs_dir: Path | None = None,
+) -> GhdlResult:
     """Run the generated testbench at output_dir through GHDL.
 
-    If osvvm_dir is None, reads OSVVM_DIR or OSVVM_PATH from the environment.
+    osvvm_dir: path to OsvvmLibraries; falls back to OSVVM_DIR / OSVVM_PATH env vars.
+    compiled_libs_dir: path to precompiled libraries; falls back to <osvvm_dir>/CompiledLibs.
     Returns GhdlResult with skipped=True if prerequisites are missing.
     """
     if osvvm_dir is None:
@@ -103,12 +134,12 @@ def run_ghdl(output_dir: Path, osvvm_dir: Path | None = None) -> GhdlResult:
             skipped=True, skip_reason=f"runTests.pro not found in {output_dir}",
         )
 
-    osvvm_libs_pro = osvvm_dir / "OsvvmLibraries.pro"
-    launcher = (
-        f"source {{{startup_tcl}}}\n"
-        f"build {{{osvvm_libs_pro}}}\n"
-        f"build runTests.pro\n"
-    )
+    if compiled_libs_dir is None:
+        candidate = osvvm_dir / "CompiledLibs"
+        if candidate.is_dir() and any(candidate.rglob("*.cf")):
+            compiled_libs_dir = candidate
+
+    launcher = _build_launcher(startup_tcl, osvvm_dir, compiled_libs_dir)
 
     fd, launcher_path = tempfile.mkstemp(suffix=".tcl", prefix="osvvm_launch_")
     try:

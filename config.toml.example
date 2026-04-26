@@ -1,0 +1,7 @@
+[ghdl]
+# Path to OsvvmLibraries root. Overrides OSVVM_DIR / OSVVM_PATH env vars.
+osvvm_dir = "/path/to/OsvvmLibraries"
+
+# Path to precompiled GHDL libraries. If absent, falls back to <osvvm_dir>/CompiledLibs,
+# then to compiling OsvvmLibraries from source.
+compiled_libs_dir = "/path/to/OsvvmLibraries/CompiledLibs"

@@ -7,7 +7,8 @@ import os
 import sys
 from pathlib import Path
 
-from src.ghdl_runner import GhdlResult, run_ghdl
+from src.config import load_config
+from src.ghdl_runner import GhdlResult, run_ghdl, write_launcher
 from src.pipeline import resume_pipeline, run_pipeline
 from src.renderer import _tb_entity_name
 
@@ -207,21 +208,28 @@ def main():
     unfilled   = state["unfilled"]
     results["_output_dir"] = args.output_dir
 
+    cfg = load_config()
+    osvvm_dir_str = os.environ.get("OSVVM_DIR") or os.environ.get("OSVVM_PATH")
+    osvvm_dir = cfg.osvvm_dir or (Path(osvvm_dir_str) if osvvm_dir_str else None)
+
+    if osvvm_dir is not None:
+        write_launcher(Path(args.output_dir), osvvm_dir, cfg.compiled_libs_dir)
+        results["run.tcl"] = True
+
     _print_report(dut, res, results, unfilled)
 
     if args.simulate:
-        osvvm_dir_env = os.environ.get("OSVVM_DIR") or os.environ.get("OSVVM_PATH")
-        if not osvvm_dir_env:
-            print("error: --simulate requires OSVVM_DIR or OSVVM_PATH to be set", file=sys.stderr)
+        if osvvm_dir is None:
+            print("error: --simulate requires osvvm_dir in config.toml or OSVVM_DIR env var", file=sys.stderr)
         elif not all(v for k, v in state["results"].items()):
             print("  ~ skipping simulation: not all files rendered successfully")
         else:
-            _run_ghdl_report(Path(args.output_dir), Path(osvvm_dir_env))
+            _run_ghdl_report(Path(args.output_dir), osvvm_dir, cfg.compiled_libs_dir)
 
 
-def _run_ghdl_report(output_dir: Path, osvvm_dir: Path) -> None:
+def _run_ghdl_report(output_dir: Path, osvvm_dir: Path, compiled_libs_dir: Path | None = None) -> None:
     print("── GHDL compile + simulate ──────────────────────────────────")
-    result: GhdlResult = run_ghdl(output_dir, osvvm_dir)
+    result: GhdlResult = run_ghdl(output_dir, osvvm_dir, compiled_libs_dir)
 
     if result.skipped:
         print(f"  ~ skipped: {result.skip_reason}")
