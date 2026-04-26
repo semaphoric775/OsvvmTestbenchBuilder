@@ -169,6 +169,36 @@ def _signal_definitions(instances: list[VcInstance], generics: list | None = Non
     return '\n'.join(lines)
 
 
+def _stream_param_width(inst: 'VcInstance', generics: list) -> int:
+    """Compute ParamToModel width: 1 (tlast) + tid_w + tdest_w + tuser_w.
+
+    The OSVVM AxiStreamTbPkg packs {Last, ID, Dest, User} into a single Param
+    vector and indexes into it.  If Param is undersized the simulation crashes
+    with an index-out-of-bounds error.
+    """
+    prefix = inst.prefix
+
+    def _field_width(field: str, default: int) -> int:
+        # Check matched ports first
+        for p in inst.ports:
+            if p.name[len(prefix):].lower() == field:
+                typ = _substitute_generics(p.type, generics)
+                m = re.search(r'\((.+?)downto', typ)
+                if m:
+                    try:
+                        return int(m.group(1).strip()) + 1
+                    except ValueError:
+                        pass
+                return 1  # std_logic
+        # Not matched — use the default dummy width from _axi_stream_optional_type
+        return default
+
+    tid_w   = _field_width("tid",   1)
+    tdest_w = _field_width("tdest", 1)
+    tuser_w = _field_width("tuser", 1)
+    return 1 + tid_w + tdest_w + tuser_w
+
+
 def _stream_rec_constraint(inst: 'VcInstance', generics: list) -> str:
     """Build a constrained StreamRecType string from the matched TData port width."""
     data_range = "7 downto 0"
@@ -179,12 +209,14 @@ def _stream_rec_constraint(inst: 'VcInstance', generics: list) -> str:
             if m:
                 data_range = m.group(1)
             break
+    param_w = _stream_param_width(inst, generics)
+    param_range = f"{param_w - 1} downto 0"
     return (
         f"StreamRecType("
         f"DataToModel({data_range}), "
         f"DataFromModel({data_range}), "
-        f"ParamToModel(0 downto 0), "
-        f"ParamFromModel(0 downto 0))"
+        f"ParamToModel({param_range}), "
+        f"ParamFromModel({param_range}))"
     )
 
 

@@ -119,6 +119,7 @@ def _node_generate_txns(state: PipelineState) -> dict:
         state["resolution"].instances,
         state["dut"].entity_name,
         test_plan=state.get("test_plan", ""),
+        generics=state["dut"].generics,
     )
     return {"generated_transactions": txns}
 
