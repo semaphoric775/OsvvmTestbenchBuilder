@@ -43,8 +43,13 @@ Rules:
 - Always call WaitForClock(<Rec>, 2) before the first transaction.
 - End the process body with WaitForBarrier(TestDone) on its own line.
 - Add a short -- comment before each logical group of transactions.
-- Use the provided scoreboard variable for checking (push before send/write,
-  check after receive/read). Do NOT use AffirmIfEqual — use the scoreboard.
+- Checking strategy depends on role:
+    MANAGER/TRANSMITTER role: After each Send (or group of Sends), call
+      WaitForTransaction(rec) then AffirmIfEqual(dut_output, expected, "msg")
+      on the plain DUT output signals listed in the prompt. Do NOT declare or
+      use a scoreboard — there is no paired receiver to Pop from it.
+    SUBORDINATE/RECEIVER role: Use scoreboard Push before each Get/Check,
+      then scoreboard Check after receiving. Do NOT use AffirmIfEqual.
 - Process-local variables (e.g. for Read oData) go between "-- PROCESS VARS:"
   and "-- END PROCESS VARS:" markers, before the first statement.
 """
@@ -56,18 +61,15 @@ Entity: {entity_name}
 VC type: {vc_type}
 Testbench VC role: {role}   (manager/transmitter drives the DUT; subordinate/receiver accepts from the DUT)
 Transaction record signal: {rec_signal}
-Scoreboard variable: {sb_var}  (type: {sb_pkg}.ScoreboardPType)
 Interface data width: {data_width} bits  → use {data_hex_digits}-digit hex literals, e.g. X"{data_example}"
 Interface address width: {addr_width} bits  → use {addr_hex_digits}-digit hex literals, e.g. X"{addr_example}"
-
+{checking_context}
 Available API procedures (from actual OSVVM source):
 {api}
 
 Output format:
--- SHARED DECLARATIONS:
-shared variable {sb_var} : {sb_pkg}.ScoreboardPType ;
--- END SHARED DECLARATIONS
-<process body statements>
+{output_format}
+Then the process body VHDL statements (no wrapper, no tags).
 """
 
 
@@ -123,6 +125,9 @@ def _parse_block(raw: str) -> tuple[str, str, str]:
 
     for line in raw.splitlines():
         stripped = line.strip()
+        # Strip XML-like tags the LLM sometimes echoes from the format instruction
+        if stripped.startswith("<") and stripped.endswith(">") and "process body" in stripped.lower():
+            continue
         if stripped.startswith("-- SHARED DECLARATIONS"):
             in_shared = True
             continue
@@ -197,15 +202,29 @@ def _sanitize(body: str, data_hex_digits: int) -> str:
     return "\n".join(fixed_lines)
 
 
+def _plain_outputs_text(plain_instances: list[VcInstance]) -> str:
+    """Build a prompt section listing plain DUT output signals available for AffirmIfEqual."""
+    lines = []
+    for inst in plain_instances:
+        for p in inst.ports:
+            if p.direction.value == "out":
+                lines.append(f"  {p.name} : {p.type}")
+    if not lines:
+        return ""
+    return "DUT plain output signals (read these after WaitForTransaction to verify behaviour):\n" + "\n".join(lines) + "\n\n"
+
+
 def generate_transactions(
     instances: list[VcInstance],
     entity_name: str,
     test_plan: str = "",
     generics: list | None = None,
+    plain_instances: list[VcInstance] | None = None,
 ) -> dict[str, dict]:
     """Return {rec_signal: {"shared_decls": str, "local_vars": str, "body": str}}.
 
-    Plain-signal instances are skipped.
+    Plain-signal instances are skipped for generation but their output ports are
+    passed to the LLM as signals available for AffirmIfEqual checks.
     """
     vc_instances = [i for i in instances if i.spec and i.vc_type != "plain"]
     if not vc_instances:
@@ -214,6 +233,7 @@ def generate_transactions(
     llm = get_llm(temperature=0.2)
     results: dict[str, dict] = {}
 
+    plain_outputs_text = _plain_outputs_text(plain_instances or [])
     plan_context = f"\nTest plan to follow:\n{test_plan}\n" if test_plan else ""
 
     for inst in vc_instances:
@@ -225,19 +245,31 @@ def generate_transactions(
         api_text = get_api(inst.vc_type, tb_role)
         dw = _data_width(inst, generics or [])
         aw = _addr_width(inst, generics or [])
+
+        if tb_role == "manager":
+            checking_context = plain_outputs_text
+            output_format = "-- no shared declarations needed for manager/transmitter role"
+        else:
+            checking_context = f"Scoreboard variable: {sb_var}  (type: {sb_pkg}.ScoreboardPType)\n"
+            output_format = (
+                f"-- SHARED DECLARATIONS:\n"
+                f"shared variable {sb_var} : {sb_pkg}.ScoreboardPType ;\n"
+                f"-- END SHARED DECLARATIONS"
+            )
+
         prompt = _USER_TEMPLATE.format(
             entity_name=entity_name,
             vc_type=inst.vc_type,
             role=tb_role,
             rec_signal=inst.signal_name,
-            sb_var=sb_var,
-            sb_pkg=sb_pkg,
             data_width=dw,
             data_hex_digits=dw // 4,
             data_example="AB" if dw == 8 else "AB" * (dw // 8),
             addr_width=aw,
             addr_hex_digits=aw // 4,
             addr_example="0000_0000" if aw == 32 else "00" * (aw // 8),
+            checking_context=checking_context,
+            output_format=output_format,
             api=api_text,
         ) + plan_context
 

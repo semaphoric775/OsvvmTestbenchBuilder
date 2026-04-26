@@ -137,13 +137,20 @@ procedure SendBurstRandom(
     constant NumFifoWords   : in    integer;
     constant StatusMsgOn    : in    boolean := false);
 
--- ── Scoreboard ────────────────────────────────────────────────────────────
--- Architecture declaration:
---   shared variable <Rec>_SB : osvvm.ScoreboardPkg_slv.ScoreboardPType ;
+-- ── Checking DUT outputs after Send ──────────────────────────────────────
+-- After Send completes, call WaitForTransaction then AffirmIfEqual on plain
+-- DUT output signals to verify behaviour.  This is the correct pattern for a
+-- transmitter driving a sink DUT:
 --
--- Before each Send, push the expected value so the paired receiver can check:
---   <Rec>_SB.Push(DataWord) ;
---   Send(TransactionRec, DataWord) ;
+--   Send(TransactionRec, X"AB") ;
+--   WaitForTransaction(TransactionRec) ;
+--   AffirmIfEqual(dut_output, expected_slv, "description") ;
+--
+-- AffirmIfEqual (from AlertLogPkg, always in scope via OsvvmContext):
+procedure AffirmIfEqual(Received : std_logic_vector; Expected : std_logic_vector; Message : string := "");
+--
+-- Do NOT use a scoreboard in the transmitter role — there is no paired receiver
+-- to Pop from it, so Push calls are wasted and Check calls will hang.
 """
 
 # ---------------------------------------------------------------------------

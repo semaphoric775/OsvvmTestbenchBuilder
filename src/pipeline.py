@@ -115,11 +115,13 @@ def _node_generate_txns(state: PipelineState) -> dict:
     if not state["llm_enabled"]:
         return {"generated_transactions": {}}
     from src.txn_gen_node import generate_transactions
+    all_instances = state["resolution"].instances
     txns = generate_transactions(
-        state["resolution"].instances,
+        all_instances,
         state["dut"].entity_name,
         test_plan=state.get("test_plan", ""),
         generics=state["dut"].generics,
+        plain_instances=[i for i in all_instances if i.vc_type == "plain"],
     )
     return {"generated_transactions": txns}
 
