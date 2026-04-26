@@ -220,15 +220,14 @@ def _stream_rec_constraint(inst: 'VcInstance', generics: list) -> str:
     )
 
 
-def _vc_rec_type(inst: 'VcInstance', generics: list) -> str:
+def _vc_rec_type(inst: 'VcInstance', generics: list, constrained: bool = True) -> str:
     """Return the transaction record type string for a VC instance."""
-    # For subordinate DUT, testbench uses manager VC → manager_rec_type
     rec_type = (
         inst.spec.manager_rec_type
         if inst.role == "subordinate"
         else inst.spec.subordinate_rec_type
     )
-    if rec_type == "StreamRecType":
+    if constrained and rec_type == "StreamRecType":
         return _stream_rec_constraint(inst, generics)
     return rec_type
 
@@ -369,7 +368,7 @@ def _testctrl_ports_section(instances: list[VcInstance], indent: str = _IND8, ge
                 lines.append(f"{indent}{tc_name:<20} : {tc_dir:<6}{typ}")
     for inst in instances:
         if inst.spec:
-            rec_type = _vc_rec_type(inst, generics or [])
+            rec_type = _vc_rec_type(inst, generics or [], constrained=False)
             lines.append(f"{indent}{inst.signal_name:<20} : inout {rec_type}")
     return ' ;\n'.join(lines)
 
@@ -420,31 +419,29 @@ _OSVVM_LIB_PATHS: dict[str, str] = {
 }
 
 
-def _toolsettings(instances: list[VcInstance]) -> str:
+def _toolsettings(instances: list[VcInstance], osvvm_dir: Path | None = None, compiled_libs_dir: Path | None = None) -> str:
     used_libs = dict.fromkeys(
         inst.spec.osvvm_library for inst in instances if inst.spec
     )
-    vc_includes = [
-        f"include {_OSVVM_LIB_PATHS[lib]}  ;# {lib}"
-        for lib in used_libs
-        if lib in _OSVVM_LIB_PATHS
-    ]
 
-    lib_comment = (
-        ["#", "# ── OSVVM library dependencies (must be pre-compiled) ───────────────────────────"]
-        + [f"#   {_OSVVM_LIB_PATHS[lib]}  ({lib})" for lib in used_libs if lib in _OSVVM_LIB_PATHS]
-        if used_libs else []
-    )
+    lines: list[str] = []
 
-    lines = [
-        "# ── GHDL startup procedure ───────────────────────────────────────────────────",
-        "# 1. Set environment:  export OSVVM_DIR=/path/to/OsvvmLibraries",
-        "# 2. Pre-compile libs: tclsh > source $::env(OSVVM_DIR)/Scripts/StartGHDL.tcl",
-        "#                            > build $::env(OSVVM_DIR)/OsvvmLibraries.pro",
-        "# 3. Launch tclsh:     rlwrap tclsh",
-        "# 4. Source GHDL shim: source $::env(OSVVM_DIR)/Scripts/StartGHDL.tcl",
-        "# 5. Build this file:  build runTests.pro",
-    ] + lib_comment
+    if osvvm_dir is not None:
+        if compiled_libs_dir is not None:
+            lines.append(f"LinkLibraryDirectory {{{compiled_libs_dir}}}")
+        else:
+            lines.append(f"build {{{osvvm_dir / 'OsvvmLibraries.pro'}}}")
+    else:
+        lines += [
+            "# ── Library linking (source StartUp.tcl before building this file) ───────────",
+            "# LinkLibraryDirectory /path/to/OsvvmLibraries/CompiledLibs",
+        ]
+
+    if used_libs:
+        lines += [
+            "#",
+            "# ── OSVVM library dependencies (must be pre-compiled) ────────────────────────",
+        ] + [f"#   {_OSVVM_LIB_PATHS[lib]}  ({lib})" for lib in used_libs if lib in _OSVVM_LIB_PATHS]
 
     return '\n'.join(lines)
 
@@ -540,7 +537,7 @@ def _test_processes(instances: list[VcInstance], generated: dict) -> str:
 # Public interface
 # ---------------------------------------------------------------------------
 
-def build_context(dut: DutModel, res: VcResolution, env=None, generated_transactions: dict[str, str] | None = None, dut_path: Path | None = None) -> dict:
+def build_context(dut: DutModel, res: VcResolution, env=None, generated_transactions: dict[str, str] | None = None, dut_path: Path | None = None, osvvm_dir: Path | None = None, compiled_libs_dir: Path | None = None) -> dict:
     tb_name = _tb_entity_name(dut.entity_name)
     all_instances = res.instances
     vc_instances  = [i for i in all_instances if i.spec]
@@ -595,7 +592,7 @@ def build_context(dut: DutModel, res: VcResolution, env=None, generated_transact
 
         # Build script
         "libraryname":          dut.library,
-        "toolsettings":         _toolsettings(all_instances),
+        "toolsettings":         _toolsettings(all_instances, osvvm_dir=osvvm_dir, compiled_libs_dir=compiled_libs_dir),
         "analyze_project_section": (
             f"analyze {dut_path.resolve()}"
             if dut_path else
@@ -635,7 +632,9 @@ def render_all(dut: DutModel, res: VcResolution, output_dir: Path, generated_tra
         "build_template.pro":     "runTests.pro",
     }
 
-    context = build_context(dut, res, env, generated_transactions=generated_transactions, dut_path=dut_path)
+    from src.config import load_config
+    cfg = load_config()
+    context = build_context(dut, res, env, generated_transactions=generated_transactions, dut_path=dut_path, osvvm_dir=cfg.osvvm_dir, compiled_libs_dir=cfg.compiled_libs_dir)
     results: dict[str, bool] = {}
     unfilled: dict[str, list[str]] = {}
 

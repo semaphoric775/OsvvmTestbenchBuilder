@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
-from src.config import load_config
-from src.ghdl_runner import GhdlResult, run_ghdl, write_launcher
 from src.pipeline import resume_pipeline, run_pipeline
 from src.renderer import _tb_entity_name
 
@@ -159,7 +156,6 @@ def main():
     parser.add_argument("--library", default="work", help="VHDL work library name (default: work)")
     parser.add_argument("--llm", action="store_true", help="Use LLM to resolve ambiguous port groups (requires ANTHROPIC_API_KEY)")
     parser.add_argument("--plan", action="store_true", help="Generate and approve a test plan before transaction generation (implies --llm)")
-    parser.add_argument("--simulate", action="store_true", help="Compile and simulate with GHDL after generation (requires OSVVM_DIR or OSVVM_PATH)")
     args = parser.parse_args()
 
     dut_path = Path(args.dut_file)
@@ -208,49 +204,7 @@ def main():
     unfilled   = state["unfilled"]
     results["_output_dir"] = args.output_dir
 
-    cfg = load_config()
-    osvvm_dir_str = os.environ.get("OSVVM_DIR") or os.environ.get("OSVVM_PATH")
-    osvvm_dir = cfg.osvvm_dir or (Path(osvvm_dir_str) if osvvm_dir_str else None)
-
-    if osvvm_dir is not None:
-        write_launcher(Path(args.output_dir), osvvm_dir, cfg.compiled_libs_dir)
-        results["run.tcl"] = True
-
     _print_report(dut, res, results, unfilled)
-
-    if args.simulate:
-        if osvvm_dir is None:
-            print("error: --simulate requires osvvm_dir in config.toml or OSVVM_DIR env var", file=sys.stderr)
-        elif not all(v for k, v in state["results"].items()):
-            print("  ~ skipping simulation: not all files rendered successfully")
-        else:
-            _run_ghdl_report(Path(args.output_dir), osvvm_dir, cfg.compiled_libs_dir)
-
-
-def _run_ghdl_report(output_dir: Path, osvvm_dir: Path, compiled_libs_dir: Path | None = None) -> None:
-    print("── GHDL compile + simulate ──────────────────────────────────")
-    result: GhdlResult = run_ghdl(output_dir, osvvm_dir, compiled_libs_dir)
-
-    if result.skipped:
-        print(f"  ~ skipped: {result.skip_reason}")
-        print()
-        return
-
-    if result.success:
-        print("  ✓ GHDL: passed")
-    else:
-        print(f"  ✗ GHDL: failed (return code {result.returncode})")
-        if result.error_lines:
-            print()
-            print("  Errors:")
-            for line in result.error_lines[:20]:
-                print(f"    {line}")
-        if result.stdout.strip():
-            print()
-            print("  Output (last 30 lines):")
-            for line in result.stdout.splitlines()[-30:]:
-                print(f"    {line}")
-    print()
 
 
 if __name__ == "__main__":
