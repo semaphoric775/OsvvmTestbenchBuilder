@@ -3,6 +3,8 @@ library ieee ;
   use ieee.numeric_std.all ;
   use ieee.numeric_std_unsigned.all ;
 
+library osvvm ;
+  context osvvm.OsvvmContext ;
 
 {% if project_libraries %}
 {{ project_libraries }}

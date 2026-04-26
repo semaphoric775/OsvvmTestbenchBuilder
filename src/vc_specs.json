@@ -1,0 +1,72 @@
+[
+  {
+    "vc_type": "axi4lite",
+    "required": [
+      "awvalid", "awready", "awaddr",
+      "wvalid",  "wready",  "wdata",  "wstrb",
+      "bvalid",  "bready",  "bresp",
+      "arvalid", "arready", "araddr",
+      "rvalid",  "rready",  "rdata",  "rresp"
+    ],
+    "optional": [],
+    "osvvm_library": "osvvm_axi4",
+    "osvvm_context": "osvvm_axi4.Axi4LiteContext",
+    "manager_rec_type": "Axi4LiteRecType",
+    "subordinate_rec_type": "Axi4LiteRecType",
+    "manager_component": "Axi4LiteManager",
+    "subordinate_component": "Axi4LiteSubordinate",
+    "port_name_map": {}
+  },
+  {
+    "vc_type": "axi4",
+    "required": [
+      "awvalid", "awready", "awaddr", "awlen", "awsize", "awburst",
+      "wvalid",  "wready",  "wdata",  "wstrb", "wlast",
+      "bvalid",  "bready",  "bresp",
+      "arvalid", "arready", "araddr", "arlen", "arsize", "arburst",
+      "rvalid",  "rready",  "rdata",  "rresp", "rlast"
+    ],
+    "optional": [],
+    "osvvm_library": "osvvm_axi4",
+    "osvvm_context": "osvvm_axi4.Axi4Context",
+    "manager_rec_type": "Axi4RecType",
+    "subordinate_rec_type": "Axi4RecType",
+    "manager_component": "Axi4Manager",
+    "subordinate_component": "Axi4Subordinate",
+    "port_name_map": {}
+  },
+  {
+    "vc_type": "axi4stream",
+    "required": ["tvalid", "tready"],
+    "optional": ["tdata", "tkeep", "tstrb", "tlast", "tuser", "tid", "tdest"],
+    "osvvm_library": "osvvm_axi4",
+    "osvvm_context": "osvvm_axi4.AxiStreamContext",
+    "manager_rec_type": "StreamRecType",
+    "subordinate_rec_type": "StreamRecType",
+    "manager_component": "AxiStreamTransmitter",
+    "subordinate_component": "AxiStreamReceiver",
+    "port_name_map": {
+      "tvalid": "TValid",
+      "tready": "TReady",
+      "tdata":  "TData",
+      "tstrb":  "TStrb",
+      "tkeep":  "TKeep",
+      "tlast":  "TLast",
+      "tuser":  "TUser",
+      "tid":    "TID",
+      "tdest":  "TDest"
+    }
+  },
+  {
+    "vc_type": "uart",
+    "required": ["txd", "rxd"],
+    "optional": [],
+    "osvvm_library": "osvvm_uart",
+    "osvvm_context": "osvvm_uart.UartContext",
+    "manager_rec_type": "UartRecType",
+    "subordinate_rec_type": "UartRecType",
+    "manager_component": "UartTx",
+    "subordinate_component": "UartRx",
+    "port_name_map": {}
+  }
+]

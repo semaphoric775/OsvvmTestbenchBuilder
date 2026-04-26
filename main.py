@@ -7,77 +7,79 @@ import os
 import sys
 from pathlib import Path
 
-from src.extractor import extract
-from src.vc_resolver import resolve
-from src.renderer import render_all, _tb_entity_name
+from src.ghdl_runner import GhdlResult, run_ghdl
+from src.pipeline import resume_pipeline, run_pipeline
+from src.renderer import _tb_entity_name
 
 
 def _print_report(dut, res, results, unfilled):
-    tb_name = _tb_entity_name(dut.entity_name)
     print()
     print("=== OSVVM Testbench Generator ===")
     print()
     print(f"Entity:    {dut.entity_name}  (library: {dut.library})")
     print()
 
-    # Clocks
     if dut.clocks:
         print("Clocks found:")
         for clk in dut.clocks:
             port = next((p for p in dut.ports if p.name == clk), None)
-            ptype = port.type if port else "?"
-            print(f"  \u2713 {clk:<20} {ptype}")
+            print(f"  ✓ {clk:<20} {port.type if port else '?'}")
     else:
         print("  ! No clocks detected — set clock signal manually")
     print()
 
-    # Resets
     if dut.resets:
         print("Resets found:")
         for rst in dut.resets:
             port = next((p for p in dut.ports if p.name == rst.name), None)
-            ptype = port.type if port else "?"
             active = "(active low)" if rst.active_low else "(active high)"
-            print(f"  \u2713 {rst.name:<20} {ptype}  {active}")
+            print(f"  ✓ {rst.name:<20} {port.type if port else '?'}  {active}")
     else:
         print("  ! No resets detected — set reset signal manually")
     print()
 
-    # Verification Components
-    vc_instances = [i for i in res.instances if i.spec]
+    vc_instances    = [i for i in res.instances if i.spec]
     plain_instances = [i for i in res.instances if not i.spec]
     print("Verification Components:")
-    if vc_instances:
-        for inst in vc_instances:
-            matched = len(inst.ports)
-            total   = len(inst.spec.required)
-            status  = '\u2713' if inst.is_complete else '~'
-            print(f"  {status} {inst.vc_type.upper():<12} {inst.prefix!r:<18} ({matched}/{total} signals matched)")
+    for inst in vc_instances:
+        matched = len(inst.ports)
+        total   = len(inst.spec.required)
+        status  = "✓" if inst.is_complete else "~"
+        tag     = " (LLM-inferred — verify)" if inst.llm_inferred else ""
+        print(f"  {status} {inst.vc_type.upper():<12} {inst.prefix!r:<18} ({matched}/{total} signals matched){tag}")
+        for p in inst.ports:
+            suffix = p.name[len(inst.prefix):]
+            print(f"      {p.name:<28} → {suffix} ({p.direction.value})")
+        if inst.missing:
+            for m in inst.missing:
+                print(f"      {'(no ' + inst.prefix + m + ')':<28} → {m} (not in DUT)")
     if plain_instances:
         plain_count = sum(len(i.ports) for i in plain_instances)
-        print(f"  \u2713 Plain signals: {plain_count} port(s) mapped directly")
-    if not vc_instances and not plain_instances:
+        print(f"  ✓ Plain signals: {plain_count} port(s) mapped directly")
+        for inst in plain_instances:
+            for p in inst.ports:
+                print(f"      {p.name:<28} ({p.direction.value})")
+    for amb in res.ambiguous:
+        preview = ", ".join(amb.missing[:3]) + ("..." if len(amb.missing) > 3 else "")
+        print(f"  ! UNRESOLVED     {amb.prefix!r:<18} (closest: {amb.closest_spec}, missing: {preview})")
+    if not vc_instances and not plain_instances and not res.ambiguous:
         print("  (none — all ports are clocks/resets)")
     print()
 
-    # Generics
     if dut.generics:
         print("Generics:")
         for g in dut.generics:
             default = f"  default={g.default}" if g.default else ""
-            print(f"  \u2713 {g.name:<20} {g.type}{default}")
+            print(f"  ✓ {g.name:<20} {g.type}{default}")
         print()
 
-    # Output files
     print(f"Output files written to: {results.get('_output_dir', '.')}")
     for fname, ok in results.items():
-        if fname.startswith('_'):
+        if fname.startswith("_"):
             continue
-        marker = '\u2713' if ok else '\u2717'
-        print(f"  {marker} {fname}")
+        print(f"  {'✓' if ok else '✗'} {fname}")
     print()
 
-    # Action required
     actions = []
     if not dut.clocks:
         actions.append("Set clock signal in TestCtrl_e.vhd and TbToplevelTemplate")
@@ -87,22 +89,64 @@ def _print_report(dut, res, results, unfilled):
         for tok in tokens:
             actions.append(f"{fname}: {tok.strip()} — fill in manually")
     for fname, ok in results.items():
-        if fname.startswith('_'):
+        if fname.startswith("_"):
             continue
         if not ok:
             actions.append(f"{fname}: rendering failed — check errors above")
-
-    # Always note the test stub
-    test_file = f"TbTest_{dut.entity_name}.vhd"
-    actions.append(f"{test_file}: StallProc — fill in test transactions (search: TODO)")
+    for inst in vc_instances:
+        if inst.llm_inferred:
+            actions.append(f"Verify LLM-inferred VC '{inst.vc_type}' for prefix '{inst.prefix}' before simulating")
+    for amb in res.ambiguous:
+        actions.append(f"Unresolved port group '{amb.prefix}' — re-run with --llm or map manually")
+    actions.append(f"TbTest_{dut.entity_name}.vhd: StallProc — fill in test transactions (search: TODO)")
 
     print("Action required:")
-    if actions:
-        for a in actions:
-            print(f"  ! {a}")
-    else:
+    for a in actions:
+        print(f"  ! {a}")
+    if not actions:
         print("  (none — testbench should compile as-is)")
     print()
+
+
+def _confirm_test_plan(plan: str) -> bool:
+    """Print the generated test plan and ask the user to confirm. Returns True to proceed."""
+    print()
+    print("── Generated test plan ──────────────────────────────────────")
+    for line in plan.splitlines():
+        print(f"  {line}")
+    print("─────────────────────────────────────────────────────────────")
+    print("Proceed with this plan? [Y/n] ", end="", flush=True)
+
+    try:
+        answer = input().strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+    return answer in ("", "y", "yes")
+
+
+def _confirm_llm_mappings(resolution) -> bool:
+    """Print LLM-proposed VC mappings and ask the user to confirm. Returns True to proceed."""
+    llm_instances = [i for i in resolution.instances if i.llm_inferred]
+    if not llm_instances:
+        return True
+
+    print()
+    print("── LLM-proposed VC mappings ─────────────────────────────────")
+    for inst in llm_instances:
+        missing_str = f", missing: {', '.join(inst.missing)}" if inst.missing else ""
+        print(f"  {inst.vc_type.upper():<12} prefix={inst.prefix!r}  role={inst.role}{missing_str}")
+    print("─────────────────────────────────────────────────────────────")
+    print("Proceed with these mappings? [Y/n] ", end="", flush=True)
+
+    try:
+        answer = input().strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+    return answer in ("", "y", "yes")
 
 
 def main():
@@ -112,22 +156,93 @@ def main():
     parser.add_argument("dut_file", help="Path to the DUT .vhd file")
     parser.add_argument("--output-dir", default="./tb_out", help="Output directory (default: ./tb_out)")
     parser.add_argument("--library", default="work", help="VHDL work library name (default: work)")
+    parser.add_argument("--llm", action="store_true", help="Use LLM to resolve ambiguous port groups (requires ANTHROPIC_API_KEY)")
+    parser.add_argument("--plan", action="store_true", help="Generate and approve a test plan before transaction generation (implies --llm)")
+    parser.add_argument("--simulate", action="store_true", help="Compile and simulate with GHDL after generation (requires OSVVM_DIR or OSVVM_PATH)")
     args = parser.parse_args()
 
-    dut_path   = Path(args.dut_file)
-    output_dir = Path(args.output_dir)
-    osvvm_dir  = Path(os.environ.get("OSVVM_DIR", "../OsvvmLibraries"))
-
+    dut_path = Path(args.dut_file)
     if not dut_path.is_file():
         print(f"error: file not found: {dut_path}", file=sys.stderr)
         sys.exit(1)
 
-    dut = extract(dut_path, library=args.library)
-    res = resolve(dut)
-    results, unfilled = render_all(dut, res, output_dir)
-    results['_output_dir'] = str(output_dir)
+    llm_enabled = args.llm or args.plan
+    interrupt_render = llm_enabled       # always pause before render when LLM is on
+    interrupt_txns   = args.plan         # pause before txns only with --plan
+
+    state, graph = run_pipeline(
+        dut_path=dut_path,
+        library=args.library,
+        output_dir=args.output_dir,
+        llm_enabled=llm_enabled,
+        interrupt_before_render=interrupt_render,
+        interrupt_before_txns=interrupt_txns,
+    )
+
+    if interrupt_txns and graph is not None and state.get("test_plan"):
+        accepted = _confirm_test_plan(state["test_plan"])
+        if not accepted:
+            state = resume_pipeline(graph, {"test_plan": ""})
+        else:
+            state = resume_pipeline(graph, None)
+        # After resuming past generate_txns, graph may still be paused before render
+        graph = graph if interrupt_render else None
+
+    if interrupt_render and graph is not None:
+        # Graph paused before render — show proposed mappings and ask to confirm.
+        accepted = _confirm_llm_mappings(state["resolution"])
+        if not accepted:
+            # Strip LLM patches: revert inferred instances back to ambiguous plain signals.
+            res = state["resolution"]
+            non_llm = [i for i in res.instances if not i.llm_inferred]
+            from src.vc_resolver import VcResolution
+            patched_res = VcResolution(instances=non_llm, ambiguous=res.ambiguous)
+            state = resume_pipeline(graph, {"resolution": patched_res, "llm_patches": []})
+        else:
+            state = resume_pipeline(graph, None)
+
+    dut        = state["dut"]
+    res        = state["resolution"]
+    results    = dict(state["results"])
+    unfilled   = state["unfilled"]
+    results["_output_dir"] = args.output_dir
 
     _print_report(dut, res, results, unfilled)
+
+    if args.simulate:
+        osvvm_dir_env = os.environ.get("OSVVM_DIR") or os.environ.get("OSVVM_PATH")
+        if not osvvm_dir_env:
+            print("error: --simulate requires OSVVM_DIR or OSVVM_PATH to be set", file=sys.stderr)
+        elif not all(v for k, v in state["results"].items()):
+            print("  ~ skipping simulation: not all files rendered successfully")
+        else:
+            _run_ghdl_report(Path(args.output_dir), Path(osvvm_dir_env))
+
+
+def _run_ghdl_report(output_dir: Path, osvvm_dir: Path) -> None:
+    print("── GHDL compile + simulate ──────────────────────────────────")
+    result: GhdlResult = run_ghdl(output_dir, osvvm_dir)
+
+    if result.skipped:
+        print(f"  ~ skipped: {result.skip_reason}")
+        print()
+        return
+
+    if result.success:
+        print("  ✓ GHDL: passed")
+    else:
+        print(f"  ✗ GHDL: failed (return code {result.returncode})")
+        if result.error_lines:
+            print()
+            print("  Errors:")
+            for line in result.error_lines[:20]:
+                print(f"    {line}")
+        if result.stdout.strip():
+            print()
+            print("  Output (last 30 lines):")
+            for line in result.stdout.splitlines()[-30:]:
+                print(f"    {line}")
+    print()
 
 
 if __name__ == "__main__":
