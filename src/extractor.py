@@ -168,6 +168,33 @@ def _parse_section(section: str, has_direction: bool) -> list[tuple[list[str], s
     return results
 
 
+def dut_from_f_file(f_file: Path) -> Path:
+    """Return the last VHDL file path listed in a .f file.
+
+    Lines that are blank or start with '#' or '//' are skipped.
+    Paths are resolved relative to the .f file's directory.
+    """
+    base = f_file.parent
+    paths: list[Path] = []
+    try:
+        lines = f_file.read_text(errors='replace').splitlines()
+    except OSError as e:
+        print(f"error: cannot read '{f_file}': {e}", file=sys.stderr)
+        sys.exit(1)
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#') or stripped.startswith('//'):
+            continue
+        paths.append((base / stripped).resolve())
+
+    if not paths:
+        print(f"error: no VHDL files listed in '{f_file}'", file=sys.stderr)
+        sys.exit(1)
+
+    return paths[-1]
+
+
 def extract(vhd_file: Path, library: str = "work") -> DutModel:
     """Parse a VHDL file and return a DutModel.
 

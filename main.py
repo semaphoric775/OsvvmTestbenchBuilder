@@ -6,6 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from src.extractor import dut_from_f_file
 from src.pipeline import resume_pipeline, run_pipeline
 from src.renderer import _tb_entity_name
 
@@ -149,18 +150,23 @@ def _confirm_llm_mappings(resolution) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate an OSVVM testbench from a VHDL entity file."
+        description="Generate an OSVVM testbench from a .f file listing VHDL sources."
     )
-    parser.add_argument("dut_file", help="Path to the DUT .vhd file")
+    parser.add_argument("f_file", help="Path to the .f file listing DUT VHDL sources (toplevel last)")
     parser.add_argument("--output-dir", default="./tb_out", help="Output directory (default: ./tb_out)")
     parser.add_argument("--library", default="work", help="VHDL work library name (default: work)")
     parser.add_argument("--llm", action="store_true", help="Use LLM to resolve ambiguous port groups (requires ANTHROPIC_API_KEY)")
     parser.add_argument("--plan", action="store_true", help="Generate and approve a test plan before transaction generation (implies --llm)")
     args = parser.parse_args()
 
-    dut_path = Path(args.dut_file)
+    f_path = Path(args.f_file)
+    if not f_path.is_file():
+        print(f"error: file not found: {f_path}", file=sys.stderr)
+        sys.exit(1)
+
+    dut_path = dut_from_f_file(f_path)
     if not dut_path.is_file():
-        print(f"error: file not found: {dut_path}", file=sys.stderr)
+        print(f"error: DUT file not found: {dut_path}", file=sys.stderr)
         sys.exit(1)
 
     llm_enabled = args.llm or args.plan
